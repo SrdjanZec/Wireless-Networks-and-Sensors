@@ -1,0 +1,667 @@
+/* USER CODE BEGIN Header */
+/**
+  ******************************************************************************
+  * @file           : main.c
+  * @brief          : Main program body
+  ******************************************************************************
+  * @attention
+  *
+  * <h2><center>&copy; Copyright (c) 2021 STMicroelectronics.
+  * All rights reserved.</center></h2>
+  *
+  * This software component is licensed by ST under BSD 3-Clause license,
+  * the "License"; You may not use this file except in compliance with the
+  * License. You may obtain a copy of the License at:
+  *                        opensource.org/licenses/BSD-3-Clause
+  *
+  ******************************************************************************
+  */
+/* USER CODE END Header */
+/* Includes ------------------------------------------------------------------*/
+#include "main.h"
+#include "i2c.h"
+#include "rtc.h"
+#include "usart.h"
+#include "gpio.h"
+
+/* Private includes ----------------------------------------------------------*/
+/* USER CODE BEGIN Includes */
+#include <stdlib.h>
+#include <stdio.h>
+#include "string.h"
+#include "bme680.h"
+#include "fonts.h"
+#include "ssd1306.h"
+#include "buffer16.h"
+#include "TELIT_LE50_Conf.h"
+#include "Funciones_PCB_Expansion.h"
+
+/* USER CODE END Includes */
+
+/* Private typedef -----------------------------------------------------------*/
+/* USER CODE BEGIN PTD */
+struct bme680_dev gas_sensor;
+struct bme680_field_data data;
+
+/* USER CODE END PTD */
+
+/* Private define ------------------------------------------------------------*/
+/* USER CODE BEGIN PD */
+#define ID_NODO_TELIT 2
+/* USER CODE END PD */
+
+/* Private macro -------------------------------------------------------------*/
+/* USER CODE BEGIN PM */
+
+/* USER CODE END PM */
+
+/* Private variables ---------------------------------------------------------*/
+
+/* USER CODE BEGIN PV */
+uint8_t bufbme[50];
+uint8_t  bufbme1[50];
+uint32_t var1 = 0;
+uint32_t var2 = 0;
+uint8_t set_required_settings;
+int8_t rslt = 0;
+uint16_t meas_period;
+uint32_t ii = 0;
+RTC_TimeTypeDef sTime = { 0 };
+
+uint8_t Data[256];
+// new calculated variables
+float temperature, gas, humidity, pressure;
+
+volatile FIFO_TypeDef U1Rx;
+extern RTC_HandleTypeDef hrtc;
+__IO ITStatus UartReady = RESET;
+uint32_t count_loop;
+uint32_t count_WakeUp, count_WUp_main, Num_Mensa;
+float Datf;
+int i=0, estado;
+char buffer[32];
+char Rx_indx, Rx_data[2], Rx_buffer[100],Transfer_cplt;
+char car[2];
+uint8_t Despierto;
+uint8_t n;
+//uint8_t Segundos;
+uint32_t SubSegundos;
+char start = 'h';  // caracter START
+char stop = 0x16;  // caracter stop
+char C_Num_Nodo = 'N';
+char C_Num_Mensa = 'm';
+char C_Temp = 'T';
+char C_Humi = 'H';
+char C_Pres = 'P';
+uint8_t Num_Bytes=19;
+
+//nuestro num de nodo es 6
+uint8_t Num_Nodo;
+
+/* USER CODE END PV */
+
+/* Private function prototypes -----------------------------------------------*/
+void SystemClock_Config(void);
+/* USER CODE BEGIN PFP */
+//void Print_Usart2(uint8_t texto[64]);
+//void Error_Handler2(void);
+
+void user_delay_ms(uint32_t period);
+int8_t user_i2c_read(uint8_t dev_id, uint8_t reg_addr, uint8_t *reg_data,
+		uint16_t len);
+int8_t user_i2c_write(uint8_t dev_id, uint8_t reg_addr, uint8_t *reg_data,
+		uint16_t len);
+
+
+
+void BME680_Read(void);
+void USART1_PutString (char Tx_data[94]);
+void USART1_Put_char(char ch1[1]);
+char USART1_Get_char(void);
+static void RTC_TimeShow(void);
+static void RTC_SubSec(void);
+void Error_Handler3(void);
+
+/* USER CODE END PFP */
+
+/* Private user code ---------------------------------------------------------*/
+/* USER CODE BEGIN 0 */
+
+/* USER CODE END 0 */
+
+/**
+  * @brief  The application entry point.
+  * @retval int
+  */
+int main(void)
+{
+  /* USER CODE BEGIN 1 */
+  char SSDVis_Buff[11];
+  uint32_t  SubSegs_ini, SubSegs_med, SubSegs_fin ;
+	char Salida;
+	char BUF_PROG[42];
+	uint8_t car, j, sigue;
+	uint8_t Transmit_OK, Num_Transmits;
+	uint16_t Temp_I2C;
+	float Temp_degre;
+	uint8_t pData_I2C1[2];
+	uint16_t Temperatura;
+
+  /* USER CODE END 1 */
+
+  /* MCU Configuration--------------------------------------------------------*/
+
+  /* Reset of all peripherals, Initializes the Flash interface and the Systick. */
+  HAL_Init();
+
+  /* USER CODE BEGIN Init */
+
+  /* USER CODE END Init */
+
+  /* Configure the system clock */
+  SystemClock_Config();
+
+  /* USER CODE BEGIN SysInit */
+
+  /* USER CODE END SysInit */
+
+  /* Initialize all configured peripherals */
+  MX_GPIO_Init();
+  MX_USART2_UART_Init();
+  MX_I2C1_Init();
+  MX_RTC_Init();
+  MX_I2C3_Init();
+  MX_USART1_UART_Init();
+  /* USER CODE BEGIN 2 */
+  HAL_UART_Receive_IT(&huart1, (uint8_t*) Rx_data, 1);
+  RTC_TimeShow();
+
+  Inicio_TELIT_Secure_Mode();
+  TELIT_VISU_Registros();
+
+  Print_Usart2("Finished configuring micro-controller with sensor BME680 \n");
+
+  //--------------------- BME INI
+  	gas_sensor.dev_id = BME680_I2C_ADDR_PRIMARY;
+  	gas_sensor.intf = BME680_I2C_INTF;
+  	gas_sensor.read = user_i2c_read;
+  	gas_sensor.write = user_i2c_write;
+  	gas_sensor.delay_ms = user_delay_ms;
+  	gas_sensor.amb_temp = 25;
+
+  	/* Set the temperature, pressure and humidity settings */
+  	gas_sensor.tph_sett.os_hum = BME680_OS_16X;
+  	gas_sensor.tph_sett.os_pres = BME680_OS_16X;
+  	gas_sensor.tph_sett.os_temp = BME680_OS_16X;
+  	gas_sensor.tph_sett.filter = BME680_FILTER_SIZE_127;
+
+  	/* Set the remaining gas sensor settings and link the heating profile */
+  	gas_sensor.gas_sett.run_gas = BME680_ENABLE_GAS_MEAS;
+  	/* Create a ramp heat waveform in 3 steps */
+  	gas_sensor.gas_sett.heatr_temp = 320; /* degree Celsius */
+  	gas_sensor.gas_sett.heatr_dur = 150; /* milliseconds */
+
+  	/* Select the power mode */
+  	/* Must be set before writing the sensor configuration */
+  	gas_sensor.power_mode = BME680_FORCED_MODE;
+
+  	/* Set the required sensor settings needed */
+  	set_required_settings = BME680_OST_SEL | BME680_OSP_SEL | BME680_OSH_SEL
+  			| BME680_FILTER_SEL | BME680_GAS_SENSOR_SEL;
+
+
+  	rslt = bme680_init(&gas_sensor);
+
+
+  	/* Set the desired sensor configuration */
+
+  	rslt = bme680_set_sensor_settings(set_required_settings, &gas_sensor);
+
+
+
+  	/* Set the power mode */
+
+  	rslt = bme680_set_sensor_mode(&gas_sensor);
+
+
+
+  	bme680_get_profile_dur(&meas_period, &gas_sensor);
+
+  	//******************  OLED Init  *********************
+  	ssd1306_Init();
+	HAL_Delay(1000);
+
+	ssd1306_Fill(White);
+	ssd1306_UpdateScreen();
+	HAL_Delay(1000);
+
+	ssd1306_SetCursor(16, 4);
+
+	sprintf(SSDVis_Buff, "Svetlana", Data);
+	ssd1306_WriteString(SSDVis_Buff,Font_11x18,Black);
+	ssd1306_UpdateScreen();
+	HAL_Delay(1500);
+
+	ssd1306_SetCursor(8, 24);
+
+	sprintf(SSDVis_Buff, "  Zec  ", Data);
+	ssd1306_WriteString(SSDVis_Buff,Font_11x18,Black);
+	ssd1306_UpdateScreen();
+	HAL_Delay(1500);
+
+	ssd1306_SetCursor(8, 44);
+	sprintf(SSDVis_Buff, "Selena", Data);
+	ssd1306_WriteString(SSDVis_Buff,Font_11x18,Black);
+	ssd1306_UpdateScreen();
+	HAL_Delay(3000);
+	ssd1306_Fill(White);
+	ssd1306_UpdateScreen();
+	HAL_Delay(1500);
+
+	// End oled init
+
+  /* USER CODE END 2 */
+
+  /* Infinite loop */
+  /* USER CODE BEGIN WHILE */
+
+	Num_Bytes = 13;
+	count_WUp_main = 0;
+	Despierto = 0;
+	sigue = 0;
+	Num_Nodo = ID_NODO_TELIT;
+
+	Mensa_debug_Usart2("Press the blue button \n");
+
+	while ( Read_Pul_Azul() == 1 ){ };
+
+  while (1)
+  {
+
+	  BME680_Read();
+
+	  // put temperature in oled
+	  ssd1306_SetCursor(0, 4);
+	  sprintf(SSDVis_Buff,"Temp:%4.1f C\n", temperature);
+	  ssd1306_WriteString(SSDVis_Buff,Font_11x18,Black);
+
+
+	  ssd1306_SetCursor(0, 24);
+	  sprintf(SSDVis_Buff,"Pres:%4.1f hPa\n", pressure);
+	  ssd1306_WriteString(SSDVis_Buff,Font_11x18,Black);
+
+	  ssd1306_SetCursor(0, 44);
+	  sprintf(SSDVis_Buff,"Hum :%4.1f \%rh", humidity);
+	  ssd1306_WriteString(SSDVis_Buff,Font_11x18,Black);
+
+	  sprintf(SSDVis_Buff,"Gas :%4.1f Kohms", gas);
+	  ssd1306_WriteString(SSDVis_Buff,Font_11x18,Black);
+	  ssd1306_UpdateScreen();
+	  ssd1306_UpdateScreen();
+
+	  HAL_Delay(500);
+
+	  ssd1306_Fill(White);
+
+
+	  	}
+
+    /* USER CODE END WHILE */
+
+    /* USER CODE BEGIN 3 */
+  }
+  /* USER CODE END 3 */
+}
+
+/**
+  * @brief System Clock Configuration
+  * @retval None
+  */
+void SystemClock_Config(void)
+{
+  RCC_OscInitTypeDef RCC_OscInitStruct = {0};
+  RCC_ClkInitTypeDef RCC_ClkInitStruct = {0};
+  RCC_PeriphCLKInitTypeDef PeriphClkInit = {0};
+
+  /** Initializes the RCC Oscillators according to the specified parameters
+  * in the RCC_OscInitTypeDef structure.
+  */
+  RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSI|RCC_OSCILLATORTYPE_LSI;
+  RCC_OscInitStruct.HSIState = RCC_HSI_ON;
+  RCC_OscInitStruct.HSICalibrationValue = RCC_HSICALIBRATION_DEFAULT;
+  RCC_OscInitStruct.LSIState = RCC_LSI_ON;
+  RCC_OscInitStruct.PLL.PLLState = RCC_PLL_ON;
+  RCC_OscInitStruct.PLL.PLLSource = RCC_PLLSOURCE_HSI;
+  RCC_OscInitStruct.PLL.PLLM = 2;
+  RCC_OscInitStruct.PLL.PLLN = 10;
+  RCC_OscInitStruct.PLL.PLLP = RCC_PLLP_DIV7;
+  RCC_OscInitStruct.PLL.PLLQ = RCC_PLLQ_DIV2;
+  RCC_OscInitStruct.PLL.PLLR = RCC_PLLR_DIV4;
+  if (HAL_RCC_OscConfig(&RCC_OscInitStruct) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /** Initializes the CPU, AHB and APB buses clocks
+  */
+  RCC_ClkInitStruct.ClockType = RCC_CLOCKTYPE_HCLK|RCC_CLOCKTYPE_SYSCLK
+                              |RCC_CLOCKTYPE_PCLK1|RCC_CLOCKTYPE_PCLK2;
+  RCC_ClkInitStruct.SYSCLKSource = RCC_SYSCLKSOURCE_PLLCLK;
+  RCC_ClkInitStruct.AHBCLKDivider = RCC_SYSCLK_DIV1;
+  RCC_ClkInitStruct.APB1CLKDivider = RCC_HCLK_DIV1;
+  RCC_ClkInitStruct.APB2CLKDivider = RCC_HCLK_DIV1;
+
+  if (HAL_RCC_ClockConfig(&RCC_ClkInitStruct, FLASH_LATENCY_1) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  PeriphClkInit.PeriphClockSelection = RCC_PERIPHCLK_RTC|RCC_PERIPHCLK_USART1
+                              |RCC_PERIPHCLK_USART2|RCC_PERIPHCLK_I2C1
+                              |RCC_PERIPHCLK_I2C3;
+  PeriphClkInit.Usart1ClockSelection = RCC_USART1CLKSOURCE_PCLK2;
+  PeriphClkInit.Usart2ClockSelection = RCC_USART2CLKSOURCE_PCLK1;
+  PeriphClkInit.I2c1ClockSelection = RCC_I2C1CLKSOURCE_PCLK1;
+  PeriphClkInit.I2c3ClockSelection = RCC_I2C3CLKSOURCE_PCLK1;
+  PeriphClkInit.RTCClockSelection = RCC_RTCCLKSOURCE_LSI;
+  if (HAL_RCCEx_PeriphCLKConfig(&PeriphClkInit) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /** Configure the main internal regulator output voltage
+  */
+  if (HAL_PWREx_ControlVoltageScaling(PWR_REGULATOR_VOLTAGE_SCALE1) != HAL_OK)
+  {
+    Error_Handler();
+  }
+}
+
+/* USER CODE BEGIN 4 */
+ //Funciones envio datos al hiperterminal
+
+void Print_Usart2(uint8_t texto[64])
+{
+		if(HAL_UART_Transmit(&huart2, (uint8_t*)texto, (uint16_t) strlen(texto), 100)!= HAL_OK)
+		{
+			Error_Handler2();
+		}
+		HAL_Delay (50);
+		return;
+}
+
+void Error_Handler2(void)
+//{
+//  /* USER CODE BEGIN Error_Handler */
+//  while (1)
+//  {
+//  }
+//  /* USER CODE END Error_Handler_Debug */
+//}
+
+
+// Functions of the sensor BME680
+
+void user_delay_ms(uint32_t period)
+{
+	HAL_Delay(period);
+}
+
+int8_t user_i2c_read(uint8_t dev_id, uint8_t reg_addr, uint8_t *reg_data,
+		uint16_t len) {
+	int8_t rslt = 0;
+	HAL_StatusTypeDef status = HAL_OK;
+	status = HAL_I2C_Mem_Read(&hi2c1, dev_id, reg_addr, I2C_MEMADD_SIZE_8BIT,
+			(uint8_t*) reg_data, len, 0x10000);
+	if (status != HAL_OK)
+		rslt = -3;
+	return rslt;
+}
+
+int8_t user_i2c_write(uint8_t dev_id, uint8_t reg_addr, uint8_t *reg_data,
+		uint16_t len) {
+	int8_t rslt = 0;
+	HAL_StatusTypeDef status = HAL_OK;
+	status = HAL_I2C_Mem_Write(&hi2c1, dev_id, reg_addr, I2C_MEMADD_SIZE_8BIT,
+			(uint8_t*) reg_data, len, 0x10000);
+	if (status != HAL_OK)
+		rslt = -3;
+	return rslt;
+}
+
+void BME680_Read(void) {
+
+	user_delay_ms(meas_period);
+	rslt = bme680_get_sensor_data(&data, &gas_sensor);
+    sprintf(bufbme1, "T: %.1f degC - ", data.temperature / 100.0f);
+    Print_Usart2(bufbme1);
+    temperature = data.temperature / 100.0f;
+
+	sprintf(bufbme1, "P: %.1f hPa - ", data.pressure / 100.0f);
+	Print_Usart2(bufbme1);
+	pressure = data.pressure / 100.0f;
+
+	sprintf(bufbme1, "H %.1f %%rH -  ", data.humidity / 1000.0f);
+	Print_Usart2(bufbme1);
+	//Print_Usart2(" \n");
+	humidity = data.humidity / 1000.0f;
+
+	if (data.status & BME680_GASM_VALID_MSK) {
+
+		sprintf(bufbme1, "G: %.1f Kohms ", data.gas_resistance / 1000.0f);
+		Print_Usart2(bufbme1);
+		Print_Usart2(" \n");
+		gas = data.gas_resistance / 1000.0f;
+	}
+
+	/*  Trigger the next measurement if you would like to read data out continuously*/
+	if (gas_sensor.power_mode == BME680_FORCED_MODE) {
+		rslt = bme680_set_sensor_mode(&gas_sensor);
+	}
+
+}
+
+void USART1_PutString (char Tx_data[94])
+{
+	if(HAL_UART_Transmit_IT(&huart1, (uint8_t*) Tx_data, (uint16_t) strlen(Tx_data))!= HAL_OK)
+  {
+    Error_Handler3();
+  }
+  /*##-3- Wait for the end of the transfer ###################################*/
+  while (UartReady != SET)
+  {
+  }
+  /* Reset transmission flag */
+  UartReady = RESET;
+
+	//HAL_UART_Transmit_IT(&huart1, (uint8_t*) Tx_data, (uint16_t) strlen(Tx_data));
+}
+
+void USART1_Put_char(char ch1[1])
+{
+	//HAL_UART_Transmit_IT(&huart1, (uint8_t*) ch1, 1);
+	if(HAL_UART_Transmit_IT(&huart1, (uint8_t*) ch1, 1)!= HAL_OK)
+  {
+    Error_Handler3();
+  }
+  /*##-3- Wait for the end of the transfer ###################################*/
+  while (UartReady != SET)
+  {
+  }
+  /* Reset transmission flag */
+  UartReady = RESET;
+}
+
+char USART1_Get_char(void)
+{
+	uint8_t ch;
+
+	//check if buffer is empty
+	while (BufferIsEmpty(&U1Rx) == SUCCESS);
+	BufferGet(&U1Rx, &ch);
+
+	return ch;
+}
+
+/**
+  * @brief  Tx Transfer completed callback
+  * @param  UartHandle: UART handle.
+  * @note   This example shows a simple way to report end of IT Tx transfer, and
+  *         you can add your own implementation.
+  * @retval None
+  */
+void HAL_UART_TxCpltCallback(UART_HandleTypeDef *UartHandle)
+{
+	/* Turn LED6 on: Transfer in transmission process is correct */
+  UartReady = SET ;
+}
+
+/**
+  * @brief  Rx Transfer completed callback
+  * @param  UartHandle: UART handle
+  * @note   This example shows a simple way to report end of IT Rx transfer, and
+  *         you can add your own implementation.
+  * @retval None
+  */
+void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
+{
+	if (huart->Instance == USART1)	//current UART
+		{
+		BufferPut(&U1Rx, Rx_data[0]);//   add data to Rx_buffer
+		HAL_UART_Receive_IT(&huart1, (uint8_t*) Rx_data, 1);	//activate UART receive for next char received
+		}
+}
+
+
+//  uint32_t Pact_1 , Papa_1
+void HAL_RTCEx_WakeUpTimerEventCallback(RTC_HandleTypeDef *hrtc)
+{
+
+		//char car[2];
+		//LED_LD5_CAMBIO();
+		//count_WakeUp++;
+		//Mensa_debug_Usart2(" * WAKE UP * \n");
+		Despierto = 1;
+		//LED_AZUL_OFF();
+		return;
+}
+
+// ******************  Funciones manejo RTC *******************
+/**
+  * @brief  Display the current time and date.
+  * @param  showtime : pointer to buffer
+  * @param  showdate : pointer to buffer
+  * @retval None
+  */
+static void RTC_TimeShow(void)
+{
+	uint8_t showtime[32];
+	uint8_t showdate[32];
+
+  RTC_TimeTypeDef sTime;
+  RTC_DateTypeDef sDate;
+
+  /* Get the RTC current Time */
+  HAL_RTC_GetTime(&hrtc, &sTime, FORMAT_BIN);
+  /* Get the RTC current Date */
+  HAL_RTC_GetDate(&hrtc, &sDate, FORMAT_BIN);
+
+  /* Display time Format : hh:mm:ss */
+  sprintf((char*)showtime,"TIME: %0.2d:%0.2d:%0.2d \n",sTime.Hours, sTime.Minutes, sTime.Seconds);
+	Mensa_debug_Usart2((char*)showtime);
+  /* Display date Format : mm-dd-yy */
+  // sprintf((char*)showdate,"DATE: %0.2d-%0.2d-%0.2d \n",sDate.Month, sDate.Date, 2000 + sDate.Year);
+	// Mensa_debug_Usart2((char*)showdate);
+	return;
+}
+
+/**
+  * @brief  Display the current time and date.
+  * @param  showtime : pointer to buffer
+  * @param  showdate : pointer to buffer
+  * @retval None
+  */
+//static void RTC_Sec_SubSec(uint8_t Segundos, uint32_t SubSegundos)
+//{
+//	uint8_t showtime[32];
+
+//  RTC_TimeTypeDef sTime;
+//  RTC_DateTypeDef sDate;
+
+//  /* Get the RTC current Time */
+//  HAL_RTC_GetTime(&hrtc, &sTime, FORMAT_BIN);
+//  /* Get the RTC current Date */
+//  HAL_RTC_GetDate(&hrtc, &sDate, FORMAT_BIN);
+
+//	Segundos = sTime.Seconds ;
+//	SubSegundos = sTime.SubSeconds;
+//  // /* Display time Format : hh:mm:ss */
+//  // sprintf((char*)showtime,"TIME: %0.2d:%0.2d:%0.2d:%0.3d \n \n",sTime.Hours, sTime.Minutes, sTime.Seconds, sTime.SubSeconds);
+//	// Mensa_debug_Usart2((char*)showtime);
+//	return;
+//}
+
+static void RTC_SubSec(void)
+{
+	//uint8_t showtime[32];
+
+  RTC_TimeTypeDef sTime;
+  RTC_DateTypeDef sDate;
+
+  /* Get the RTC current Time */
+  HAL_RTC_GetTime(&hrtc, &sTime, FORMAT_BIN);
+  /* Get the RTC current Date */
+  HAL_RTC_GetDate(&hrtc, &sDate, FORMAT_BIN);
+
+//	Segundos = sTime.Seconds ;
+	SubSegundos = sTime.SubSeconds;
+  // /* Display time Format : hh:mm:ss */
+  //sprintf((char*)showtime,"%0.2d,%0.3d,",sTime.Seconds, sTime.SubSeconds);
+	//Mensa_debug_Usart2((char*)showtime);
+	return;
+}
+
+void Error_Handler3(void)
+{
+  while(1)
+  {
+		/* HAL_GPIO_WritePin(GPIOE, GPIO_PIN_9, GPIO_PIN_SET); //LED roj ON
+		HAL_Delay (200);
+		HAL_GPIO_WritePin(GPIOE, GPIO_PIN_9, GPIO_PIN_RESET); //LED rojo OFF
+		HAL_Delay (200); */
+  }
+}
+
+
+/* USER CODE END 4 */
+
+/**
+  * @brief  This function is executed in case of error occurrence.
+  * @retval None
+  */
+void Error_Handler(void)
+{
+  /* USER CODE BEGIN Error_Handler_Debug */
+  /* User can add his own implementation to report the HAL error return state */
+  __disable_irq();
+  while (1)
+  {
+  }
+  /* USER CODE END Error_Handler_Debug */
+}
+
+#ifdef  USE_FULL_ASSERT
+/**
+  * @brief  Reports the name of the source file and the source line number
+  *         where the assert_param error has occurred.
+  * @param  file: pointer to the source file name
+  * @param  line: assert_param error line source number
+  * @retval None
+  */
+void assert_failed(uint8_t *file, uint32_t line)
+{
+  /* USER CODE BEGIN 6 */
+  /* User can add his own implementation to report the file name and line number,
+     ex: printf("Wrong parameters value: file %s on line %d\r\n", file, line) */
+  /* USER CODE END 6 */
+}
+#endif /* USE_FULL_ASSERT */
+
+/************************ (C) COPYRIGHT STMicroelectronics *****END OF FILE****/
